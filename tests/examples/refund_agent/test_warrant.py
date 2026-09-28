@@ -14,6 +14,7 @@ def _warrant():
         get_order("ord_1042"),
         issuer_key=SigningKey.generate(),
         holder_key=SigningKey.generate(),
+        approver_key=SigningKey.generate(),
     )
 
 

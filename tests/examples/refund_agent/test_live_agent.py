@@ -100,15 +100,14 @@ async def test_model_is_refused_then_recovers(target):
         model_provider=TestModelProvider(model),
     )
     agent_client = await stack.connect_agent(keys, target, ai_sdk_plugins=[openai])
-    effects_client = await stack.connect_effects(keys, target)
 
     warrant = mint_ticket_warrant(
-        get_order("ord_1042"), issuer_key=keys.issuer, holder_key=keys.holder
+        get_order("ord_1042"),
+        issuer_key=keys.issuer,
+        holder_key=keys.holder,
+        approver_key=keys.approver,
     )
-    async with (
-        stack.effects_worker(effects_client),
-        stack.agent_worker(agent_client, live=True),
-    ):
+    async with stack.agent_worker(agent_client, live=True):
         handle = await agent_client.start_workflow(
             RefundAgentWorkflow.run,
             AgentConfig(),

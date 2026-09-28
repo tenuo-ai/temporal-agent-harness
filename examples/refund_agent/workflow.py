@@ -11,8 +11,11 @@ decide whether a refund happens, and each does a different job:
   going straight to a human.
 * **The warrant (Tenuo) decides what is possible at all.** Minted per ticket and handed to the
   agent with ``open_ticket``: this order, at most what the customer paid, back to the card they
-  paid with, while the ticket is open. Checked first in the approval seam, and verified again
-  on the effects worker before the payment call runs.
+  paid with, while the ticket is open. Checked first in the approval seam
+  (``warrant_evaluator``), and verified again — proof of possession over the exact arguments,
+  ``tool_ctx`` excluded — by the same worker's ``TenuoWorkerInterceptor`` before the tool body
+  runs. One worker, ``require_warrant=True``: no separate effects worker, no inline-tool
+  workaround (see ``stack.py`` and ``tenuo.temporal.harness``).
 
 Two workflows share that setup:
 
@@ -55,8 +58,10 @@ with workflow.unsafe.imports_passed_through():
     )
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
-    from .tenuo_gate import tenuo_evaluator
-    from .tools import ALL_TOOLS, issue_refund, lookup_order
+    from tenuo.temporal import tenuo_install_warrant
+    from tenuo.temporal.harness import warrant_evaluator
+
+    from .tools import ALL_TOOLS, HOLDER_KEY_ID, issue_refund, lookup_order
 
 
 TASK_QUEUE = "refund-agent"
@@ -118,7 +123,7 @@ def _current_ticket_warrant() -> Warrant:
 
 def _build_evaluator():
     reviewer = agent.jev_evaluator() if JUDGE == "jev" else _stand_in_reviewer
-    return tenuo_evaluator(
+    return warrant_evaluator(
         _current_ticket_warrant,
         reviewer,
         review_above={"issue_refund": ("amount_cents", REVIEW_ABOVE_CENTS)},
@@ -148,8 +153,16 @@ class _RefundAgentBase:
 
         The warrant is not a secret: it is bound to the agent's holder key, which never leaves
         the worker's key resolver. A copy of the warrant cannot be exercised without that key.
+
+        ``tenuo_install_warrant`` makes this the SAME ambient warrant context a
+        header-carried warrant would set up at workflow start: it validates the chain against
+        this worker's trusted roots and confirms ``HOLDER_KEY_ID`` actually resolves to this
+        warrant's holder key (a warrant minted for a different holder is rejected, not
+        installed) before every later ``lookup_order``/``issue_refund`` call is transparently
+        signed against it — no per-call warrant= needed, unlike the workaround this replaces.
         """
         self.ticket_warrant = Warrant.from_base64(warrant_b64)
+        tenuo_install_warrant(self.ticket_warrant, HOLDER_KEY_ID)
         return self.ticket_warrant.id
 
 

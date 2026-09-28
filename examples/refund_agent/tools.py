@@ -1,45 +1,42 @@
 """Support tools for the refund agent.
 
-Each tool has two halves:
+Each tool is a single ``@agent.activity_tool_defn`` — durable, activity-backed, and
+gated by the harness approval policy (and auto mode) before it runs. There is no
+separate effects worker and no manual ``tenuo_execute_activity`` dispatch: the
+worker's ``TenuoWorkerInterceptor`` transparently signs a proof of possession over
+every activity this workflow schedules (including these), using whatever warrant is
+ambient on the workflow (set by ``open_ticket``), and the SAME worker's inbound
+interceptor verifies it under ``require_warrant=True`` before the tool body runs.
 
-* **The agent-facing tool** (``@agent.tool_defn``) is what the model calls. It runs inline in
-  the workflow, so the harness approval policy (and auto mode) gates it before anything
-  happens.
-* **The effect** is an ordinary Temporal activity on a separate task queue, served by a worker
-  whose Tenuo plugin requires a warrant. The tool dispatches it with
-  ``tenuo_execute_activity``, which attaches this ticket's warrant and signs a proof of
-  possession over the exact arguments. The effects worker verifies both before the activity
-  body runs.
+The trailing ``tool_ctx: AgentToolContext`` argument the harness appends to every
+activity-backed tool call (used to publish ``tool_start``/``tool_end`` events) is
+excluded from the signed/verified payload via ``pop_exclude_args`` in
+``tenuo.temporal.harness.HARNESS_TOOL_CTX_EXCLUDE_ARGS`` (see ``stack.py``) — it
+carries no capability a warrant should ever constrain.
 
-So the model never touches the payment API directly: every refund crosses the approval seam
-in the workflow and then a warrant check on the worker that holds the payment credentials.
+The payment processor is an in-memory fake so the example runs offline. Swap
+``_ORDERS`` and ``_LEDGER`` for your order service and payment API.
 
-The payment processor is an in-memory fake so the example runs offline. Swap ``_ORDERS`` and
-``_LEDGER`` for your order service and payment API.
-
-No ``from __future__ import annotations``: activity args cross Temporal's data converter.
+No ``from __future__ import annotations``: activity args cross Temporal's data
+converter.
 """
 
 from dataclasses import dataclass
 from datetime import timedelta
 
-from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
+from temporalio.workflow import ActivityConfig, unsafe
 
-with workflow.unsafe.imports_passed_through():
-    from tenuo.temporal import tenuo_execute_activity
-
+with unsafe.imports_passed_through():
     from temporal_agent_harness.harness import agent
 
-EFFECTS_TASK_QUEUE = "refund-agent-effects"
 HOLDER_KEY_ID = "refund-agent"
 
-_EFFECT_OPTIONS = {
-    "task_queue": EFFECTS_TASK_QUEUE,
-    "start_to_close_timeout": timedelta(seconds=30),
+_TOOL_CONFIG = ActivityConfig(
+    start_to_close_timeout=timedelta(seconds=30),
     # Authorization denials are non-retryable anyway; one attempt keeps output readable.
-    "retry_policy": RetryPolicy(maximum_attempts=1),
-}
+    retry_policy=RetryPolicy(maximum_attempts=1),
+)
 
 
 @dataclass
@@ -84,13 +81,22 @@ def get_order(order_id: str) -> Order:
 
 
 # ---------------------------------------------------------------------------
-# Effects: plain Temporal activities, served by the Tenuo-protected effects worker.
-# Activity names match the warrant's capability names.
+# Agent-facing, activity-backed tools. Activity names (the decorator's default:
+# the function's own name) match the warrant's capability names.
 # ---------------------------------------------------------------------------
 
 
-@activity.defn(name="lookup_order")
-async def lookup_order_activity(order_id: str) -> str:
+@agent.activity_tool_defn(
+    inherently_safe=True,
+    auto_approval_criteria="read_only",
+    activity_config=_TOOL_CONFIG,
+)
+async def lookup_order(order_id: str) -> str:
+    """Look up an order: customer, total, original payment method, and status.
+
+    Args:
+        order_id: The order id, e.g. "ord_1042".
+    """
     order = _ORDERS.get(order_id)
     if order is None:
         return f"No order {order_id}."
@@ -100,10 +106,18 @@ async def lookup_order_activity(order_id: str) -> str:
     )
 
 
-@activity.defn(name="issue_refund")
-async def issue_refund_activity(
-    order_id: str, amount_cents: int, destination: str
-) -> str:
+@agent.activity_tool_defn(
+    auto_approval_criteria="financial",
+    activity_config=_TOOL_CONFIG,
+)
+async def issue_refund(order_id: str, amount_cents: int, destination: str) -> str:
+    """Refund money to a customer. Cannot be taken back once the processor accepts it.
+
+    Args:
+        order_id: The order being refunded.
+        amount_cents: Amount to refund, in cents.
+        destination: Payment method to send the refund to.
+    """
     receipt = Receipt(
         refund_id=f"re_{len(_LEDGER) + 1:04d}",
         order_id=order_id,
@@ -117,54 +131,5 @@ async def issue_refund_activity(
     )
 
 
-EFFECT_ACTIVITIES = [lookup_order_activity, issue_refund_activity]
-
-
-# ---------------------------------------------------------------------------
-# Agent-facing tools: gated by the harness, dispatched with the ticket's warrant.
-# ---------------------------------------------------------------------------
-
-
-def _ticket_warrant():
-    """The warrant for the ticket this agent is working, held on the workflow instance."""
-    warrant = getattr(workflow.instance(), "ticket_warrant", None)
-    if warrant is None:
-        raise RuntimeError("No ticket is open on this agent; call open_ticket first.")
-    return warrant
-
-
-@agent.tool_defn(inherently_safe=True, auto_approval_criteria="read_only")
-async def lookup_order(order_id: str) -> str:
-    """Look up an order: customer, total, original payment method, and status.
-
-    Args:
-        order_id: The order id, e.g. "ord_1042".
-    """
-    return await tenuo_execute_activity(
-        lookup_order_activity,
-        args=[order_id],
-        warrant=_ticket_warrant(),
-        key_id=HOLDER_KEY_ID,
-        **_EFFECT_OPTIONS,
-    )
-
-
-@agent.tool_defn(auto_approval_criteria="financial")
-async def issue_refund(order_id: str, amount_cents: int, destination: str) -> str:
-    """Refund money to a customer. Cannot be taken back once the processor accepts it.
-
-    Args:
-        order_id: The order being refunded.
-        amount_cents: Amount to refund, in cents.
-        destination: Payment method to send the refund to.
-    """
-    return await tenuo_execute_activity(
-        issue_refund_activity,
-        args=[order_id, amount_cents, destination],
-        warrant=_ticket_warrant(),
-        key_id=HOLDER_KEY_ID,
-        **_EFFECT_OPTIONS,
-    )
-
-
 ALL_TOOLS = [lookup_order, issue_refund]
+TOOL_ACTIVITIES = [agent.tool_activity(t) for t in ALL_TOOLS]
