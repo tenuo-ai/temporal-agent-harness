@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import uuid
 
 import pytest
@@ -37,6 +38,16 @@ from temporal_agent_harness.harness.agent_protocol import (
 
 A = "ord_1042"  # $189.00, paid with pm_card_4242
 B = "ord_2210"  # $965.00, paid with pm_card_1881
+
+@pytest.fixture(autouse=True)
+def _own_task_queue(monkeypatch):
+    """A task queue per test. Agent workflows stay open after a test ends, so on a shared
+    dev server a later test's worker (with fresh keys) would otherwise pick up an earlier
+    test's workflow tasks."""
+    monkeypatch.setattr(
+        sys.modules[__name__], "TASK_QUEUE", f"refund-agent-test-{uuid.uuid4().hex[:8]}"
+    )
+
 
 
 @pytest_asyncio.fixture
@@ -61,7 +72,7 @@ async def rig(target):
     reset_ledger()
     keys = stack.Keys.generate()
     agent_client = await stack.connect_agent(keys, target)
-    async with stack.agent_worker(agent_client):
+    async with stack.agent_worker(agent_client, TASK_QUEUE):
         yield keys, agent_client
 
 
@@ -141,7 +152,7 @@ async def test_out_of_warrant_refund_is_denied_in_the_seam(rig, call, bound):
 
 
 async def test_pre_approved_tool_is_still_bound_on_the_worker(rig):
-    """lookup_order skips the approval seam entirely. The effects worker still checks it."""
+    """lookup_order skips the approval seam entirely. The worker still checks it against the warrant."""
     keys, client = rig
     handle, _warrant = await _open(client, keys, A)
     ok, other = await _run(
@@ -190,7 +201,7 @@ async def test_large_refund_waits_for_a_human_and_survives_a_worker_restart(targ
     reset_ledger()
     keys = stack.Keys.generate()
     first = await stack.connect_agent(keys, target)
-    async with stack.agent_worker(first):
+    async with stack.agent_worker(first, TASK_QUEUE):
         handle, warrant = await _open(first, keys, B)
         await handle.execute_update(
             SEND_AGENT_MESSAGE_UPDATE,
@@ -213,7 +224,7 @@ async def test_large_refund_waits_for_a_human_and_survives_a_worker_restart(targ
         assert ledger() == []
 
     second = await stack.connect_agent(keys, target)
-    async with stack.agent_worker(second):
+    async with stack.agent_worker(second, TASK_QUEUE):
         update_id = "approve-h1"
         approval = sign_refund_approval(
             warrant, keys.approver,

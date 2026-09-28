@@ -139,7 +139,7 @@ class _RefundAgentBase:
             config,
             stream=stream,
             # lookup_order is inherently safe, so auto mode never spends a call on it. It is
-            # still bound by the warrant: the effects worker checks it like any other call.
+            # still bound by the warrant: the worker checks it like any other call.
             approval_policy_default=ToolApprovalPolicy.auto_mode(
                 pre_approve_inherently_safe=True
             ),

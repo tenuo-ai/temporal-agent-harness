@@ -20,7 +20,7 @@ Two tickets:
   refund runs exactly once.
 * **Ticket C** (order ord_2210 again, a fresh ticket) is a security check: a human approves in
   the harness's seam, but the attached "approval" is signed by a key the warrant does not trust.
-  The effects worker rejects it — the harness's own yes is not enough on its own.
+  The worker's Tenuo check rejects it: the harness's own yes is not enough on its own.
 """
 
 from __future__ import annotations
@@ -105,7 +105,7 @@ def show(outcome: dict) -> None:
     status = {
         "ran": "RAN",
         "denied_at_gate": "DENIED in the approval seam",
-        "denied_at_worker": "DENIED on the effects worker",
+        "denied_at_worker": "DENIED on the worker",
     }.get(outcome["status"], outcome["status"])
     print(f"  {outcome['tool']}({json.dumps(outcome['args'])})")
     print(f"    -> {status}: {outcome['detail']}")
@@ -148,7 +148,7 @@ async def ticket_a(agent_client: Client, keys: stack.Keys) -> None:
             },
         },
         # lookup_order is pre-approved (inherently safe), so it never enters the approval
-        # seam. The effects worker still checks it against the warrant.
+        # seam. The worker still checks it against the warrant.
         {"id": "a5", "tool": "lookup_order", "args": {"order_id": "ord_2210"}},
     ]
     await send(handle, calls)
@@ -191,7 +191,7 @@ async def ticket_c(agent_client: Client, keys: stack.Keys) -> None:
         Ticket C: a forged approval must not move money.
         Same order (ord_2210), a fresh ticket. A human approves in the harness's own approval
         seam, but the "signed approval" attached to that approval is not from this ticket's
-        approver key. The warrant's approval gate only trusts that one key; the effects worker
+        approver key. The warrant's approval gate only trusts that one key, so the worker
         rejects the forgery before the refund can run.
     """)
     call_args = {
@@ -216,7 +216,7 @@ async def ticket_c(agent_client: Client, keys: stack.Keys) -> None:
     )
     [outcome] = await wait_outcomes(handle, 1)
     show(outcome)
-    print("  The forged approval was rejected by the effects worker; no money moved.")
+    print("  The forged approval was rejected on the worker; no money moved.")
 
 
 async def main() -> None:

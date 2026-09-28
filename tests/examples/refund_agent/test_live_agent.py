@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import uuid
 from datetime import timedelta
 
@@ -32,6 +33,16 @@ from temporal_agent_harness.ai_sdks.openai_agents.testing import (
 )
 from temporal_agent_harness.harness.agent_client import AgentClient
 from temporal_agent_harness.harness.agent_protocol import AgentConfig, AgentEventType
+
+@pytest.fixture(autouse=True)
+def _own_task_queue(monkeypatch):
+    """A task queue per test. Agent workflows stay open after a test ends, so on a shared
+    dev server a later test's worker (with fresh keys) would otherwise pick up an earlier
+    test's workflow tasks."""
+    monkeypatch.setattr(
+        sys.modules[__name__], "TASK_QUEUE", f"refund-agent-test-{uuid.uuid4().hex[:8]}"
+    )
+
 
 
 @pytest_asyncio.fixture
@@ -107,7 +118,7 @@ async def test_model_is_refused_then_recovers(target):
         holder_key=keys.holder,
         approver_key=keys.approver,
     )
-    async with stack.agent_worker(agent_client, live=True):
+    async with stack.agent_worker(agent_client, TASK_QUEUE, live=True):
         handle = await agent_client.start_workflow(
             RefundAgentWorkflow.run,
             AgentConfig(),

@@ -53,7 +53,7 @@ async def _turn(agent: AgentClient, client, warrant, approver_key, text: str) ->
             if approved and ev.tool_name == "issue_refund":
                 # The harness's own yes is not enough on its own: sign a real
                 # approval bound to this exact call, from this ticket's approver
-                # key, so the effects worker's approval gate is satisfied too.
+                # key, so the warrant's approval gate is satisfied too.
                 approval = sign_refund_approval(warrant, approver_key, ev.tool_input)
                 stack.client_interceptor(client).set_approvals_for_update(
                     update_id, [approval],

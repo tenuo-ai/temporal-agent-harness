@@ -17,7 +17,7 @@ or a human approver says about it.
 A refund above ``review_above_cents`` additionally requires a **cryptographic** approval from
 ``approver_key`` (``required_approvers`` + ``min_approvals`` + an ``approval_gates`` exemption
 for everything at or under the threshold) — the same $500 line the harness's own auto-mode
-review threshold uses, now also enforced as a signing requirement on the effects worker. The
+review threshold uses, now also enforced as a signing requirement on the worker. The
 harness's ``approve_tool`` update is a human's yes/no in the approval seam; this is the
 independent, worker-side guarantee that only a hash-bound signature from ``approver_key`` can
 satisfy it — a forged or unsigned approval is rejected there even if the seam said yes.
@@ -71,7 +71,7 @@ def sign_refund_approval(warrant: Warrant, approver_key: SigningKey, args: dict)
     not just to the warrant or the approver's identity. Signing with a key that
     is not one of the warrant's ``required_approvers`` (e.g. a forged approval)
     produces a real ``SignedApproval`` object that verifies cryptographically
-    against *itself*, but the effects worker rejects it: the warrant's chain
+    against *itself*, but the worker rejects it: the warrant's chain
     check only trusts approvals from the specific keys named in
     ``required_approvers``.
     """
