@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import textwrap
 import uuid
 
@@ -268,4 +269,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    # The worker logs each denied tool call as a failed activity, with a full
+    # traceback. The walkthrough prints every outcome itself, so keep those quiet.
+    logging.getLogger("temporalio.activity").setLevel(logging.ERROR)
     asyncio.run(main())
